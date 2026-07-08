@@ -1,0 +1,509 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>回転する茶室</title>
+<style>
+  html, body { margin: 0; padding: 0; overflow: hidden; height: 100%; background: #16130f; }
+  #info {
+    position: fixed; top: 18px; left: 0; right: 0; text-align: center;
+    color: #d8c9a3; font-family: 'Hiragino Mincho ProN', 'Yu Mincho', serif;
+    pointer-events: none; z-index: 2;
+  }
+  #info h1 { font-size: 20px; font-weight: 400; letter-spacing: 0.5em; margin: 0 0 6px; }
+  #info p { font-size: 11px; letter-spacing: 0.2em; margin: 0; opacity: 0.55; }
+  canvas { display: block; }
+</style>
+</head>
+<body>
+<div id="info">
+  <h1>茶　室</h1>
+  <p>ドラッグで回転 ・ ホイールでズーム ・ 放すと自動回転</p>
+</div>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script>
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x16130f);
+scene.fog = new THREE.Fog(0x16130f, 18, 40);
+
+const camera = new THREE.PerspectiveCamera(45, innerWidth/innerHeight, 0.1, 100);
+camera.position.set(9, 6.5, 9);
+camera.lookAt(0, 1.4, 0);
+
+const renderer = new THREE.WebGLRenderer({ antialias: true });
+renderer.setSize(innerWidth, innerHeight);
+renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+renderer.shadowMap.enabled = true;
+renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+document.body.appendChild(renderer.domElement);
+
+// ---------- Lights ----------
+scene.add(new THREE.AmbientLight(0x8a7a5c, 0.45));
+
+const sun = new THREE.DirectionalLight(0xffe9c4, 0.9);
+sun.position.set(8, 12, 6);
+sun.castShadow = true;
+sun.shadow.mapSize.set(2048, 2048);
+sun.shadow.camera.left = -10; sun.shadow.camera.right = 10;
+sun.shadow.camera.top = 10; sun.shadow.camera.bottom = -10;
+scene.add(sun);
+
+// warm interior lamp (near the hearth)
+const hearthLight = new THREE.PointLight(0xff8c3a, 1.1, 8);
+hearthLight.position.set(0.9, 1.2, 0.6);
+scene.add(hearthLight);
+
+// ---------- Materials ----------
+const M = {
+  tatami:  new THREE.MeshStandardMaterial({ color: 0x9aa06b, roughness: 0.95 }),
+  tatamiEdge: new THREE.MeshStandardMaterial({ color: 0x3c3a2e, roughness: 0.9 }),
+  wood:    new THREE.MeshStandardMaterial({ color: 0x6e4f33, roughness: 0.8 }),
+  woodDark:new THREE.MeshStandardMaterial({ color: 0x4a3320, roughness: 0.85 }),
+  wall:    new THREE.MeshStandardMaterial({ color: 0xb8a888, roughness: 1.0 }),
+  shoji:   new THREE.MeshStandardMaterial({ color: 0xf5eedd, roughness: 0.9, emissive: 0x554a33, emissiveIntensity: 0.35 }),
+  shojiFrame: new THREE.MeshStandardMaterial({ color: 0x3a2c1c, roughness: 0.8 }),
+  roof:    new THREE.MeshStandardMaterial({ color: 0x50483c, roughness: 0.95 }),
+  iron:    new THREE.MeshStandardMaterial({ color: 0x2b2b2e, roughness: 0.5, metalness: 0.6 }),
+  bowl:    new THREE.MeshStandardMaterial({ color: 0x7a4a3a, roughness: 0.6 }),
+  matcha:  new THREE.MeshStandardMaterial({ color: 0x7fae3f, roughness: 0.4 }),
+  scroll:  new THREE.MeshStandardMaterial({ color: 0xf2ead6, roughness: 0.95 }),
+  stone:   new THREE.MeshStandardMaterial({ color: 0x6d6a63, roughness: 1.0 }),
+  moss:    new THREE.MeshStandardMaterial({ color: 0x4a5c33, roughness: 1.0 }),
+  flower:  new THREE.MeshStandardMaterial({ color: 0xd9668a, roughness: 0.6 }),
+  stem:    new THREE.MeshStandardMaterial({ color: 0x4c6b34, roughness: 0.8 }),
+};
+
+// ---------- Root group (this is what rotates) ----------
+const room = new THREE.Group();
+scene.add(room);
+
+function box(w,h,d, mat, x,y,z, parent=room, castShadow=true){
+  const m = new THREE.Mesh(new THREE.BoxGeometry(w,h,d), mat);
+  m.position.set(x,y,z);
+  m.castShadow = castShadow; m.receiveShadow = true;
+  parent.add(m);
+  return m;
+}
+
+// ---------- Ground / garden base ----------
+const ground = new THREE.Mesh(new THREE.CylinderGeometry(7.2, 7.6, 0.5, 48), M.moss);
+ground.position.y = -0.25;
+ground.receiveShadow = true;
+room.add(ground);
+
+// stepping stones (roji path)
+[[3.2,0,2.6],[4.1,0,3.4],[5.0,0,4.0]].forEach(([x,,z],i)=>{
+  const s = new THREE.Mesh(new THREE.CylinderGeometry(0.35-i*0.03, 0.4-i*0.03, 0.12, 7), M.stone);
+  s.position.set(x, 0.06, z);
+  s.rotation.y = i*0.7;
+  s.castShadow = true; s.receiveShadow = true;
+  room.add(s);
+});
+
+// stone lantern
+(function(){
+  const g = new THREE.Group();
+  const base = new THREE.Mesh(new THREE.CylinderGeometry(0.28,0.34,0.2,6), M.stone);
+  const post = new THREE.Mesh(new THREE.CylinderGeometry(0.1,0.12,0.7,6), M.stone);
+  post.position.y = 0.45;
+  const house = new THREE.Mesh(new THREE.BoxGeometry(0.45,0.3,0.45), M.stone);
+  house.position.y = 0.95;
+  const cap = new THREE.Mesh(new THREE.ConeGeometry(0.42,0.3,4), M.stone);
+  cap.position.y = 1.25; cap.rotation.y = Math.PI/4;
+  g.add(base, post, house, cap);
+  g.children.forEach(c=>{c.castShadow=true; c.receiveShadow=true;});
+  const glow = new THREE.PointLight(0xffb45e, 0.7, 4);
+  glow.position.y = 0.95;
+  g.add(glow);
+  g.position.set(-4.2, 0.1, 3.2);
+  room.add(g);
+})();
+
+// ---------- Floor: 4.5 tatami layout ----------
+const FL = 0.18; // floor height
+const half = 2.25; // room half-size (4.5m -> scaled)
+// wooden base platform
+box(half*2+0.3, FL, half*2+0.3, M.woodDark, 0, FL/2, 0);
+
+const TY = FL + 0.03;
+function tatami(w,d,x,z,rot=0){
+  const g = new THREE.Group();
+  const mat = new THREE.Mesh(new THREE.BoxGeometry(w,0.06,d), M.tatami);
+  mat.receiveShadow = true;
+  g.add(mat);
+  // heri (cloth edges) on long sides
+  const e1 = new THREE.Mesh(new THREE.BoxGeometry(w,0.065,0.07), M.tatamiEdge);
+  e1.position.z =  d/2 - 0.035;
+  const e2 = e1.clone(); e2.position.z = -d/2 + 0.035;
+  g.add(e1, e2);
+  g.position.set(x, TY, z);
+  g.rotation.y = rot;
+  room.add(g);
+}
+// classic 4.5-jo pinwheel: 4 full mats + half mat center
+tatami(2.0,1.0, -0.7,  1.6);
+tatami(2.0,1.0,  1.6,  0.7, Math.PI/2);
+tatami(2.0,1.0,  0.7, -1.6);
+tatami(2.0,1.0, -1.6, -0.7, Math.PI/2);
+tatami(1.0,1.0,  0,    0);
+
+// ---------- Pillars ----------
+const PH = 2.6;
+[[-half,-half],[half,-half],[half,half],[-half,half]].forEach(([x,z])=>{
+  box(0.16, PH, 0.16, M.wood, x, FL+PH/2, z);
+});
+
+// ---------- Walls ----------
+const WH = 2.2, WY = FL + WH/2;
+// back wall (solid, with tokonoma alcove)
+box(half*2, WH, 0.1, M.wall, 0, WY, -half);
+// left wall solid
+box(0.1, WH, half*2, M.wall, -half, WY, 0);
+
+// tokonoma (alcove) protruding from back wall
+(function(){
+  const tw = 1.6, td = 0.7;
+  const g = new THREE.Group();
+  // raised floor
+  const fl = new THREE.Mesh(new THREE.BoxGeometry(tw, 0.12, td), M.woodDark);
+  fl.position.set(0, FL+0.06, 0);
+  // side walls + back
+  const bw = new THREE.Mesh(new THREE.BoxGeometry(tw, WH, 0.08), M.wall);
+  bw.position.set(0, WY, -td/2);
+  const s1 = new THREE.Mesh(new THREE.BoxGeometry(0.08, WH, td), M.wall);
+  s1.position.set(-tw/2, WY, 0);
+  const s2 = s1.clone(); s2.position.x = tw/2;
+  // toko-bashira (feature pillar) — slightly organic cylinder
+  const pillar = new THREE.Mesh(new THREE.CylinderGeometry(0.07,0.09,WH,10), M.wood);
+  pillar.position.set(tw/2+0.05, WY, td/2);
+  // hanging scroll
+  const scroll = new THREE.Mesh(new THREE.BoxGeometry(0.42, 1.1, 0.02), M.scroll);
+  scroll.position.set(0, WY+0.25, -td/2+0.06);
+  const rod = new THREE.Mesh(new THREE.CylinderGeometry(0.02,0.02,0.5,8), M.woodDark);
+  rod.rotation.z = Math.PI/2;
+  rod.position.set(0, WY+0.82, -td/2+0.06);
+  // chabana: single flower in bamboo vase
+  const vase = new THREE.Mesh(new THREE.CylinderGeometry(0.06,0.07,0.28,10), new THREE.MeshStandardMaterial({color:0x8a9a4a, roughness:0.7}));
+  vase.position.set(-0.45, FL+0.12+0.14, 0.05);
+  const stem = new THREE.Mesh(new THREE.CylinderGeometry(0.008,0.01,0.3,6), M.stem);
+  stem.position.set(-0.45, FL+0.12+0.4, 0.05);
+  stem.rotation.z = 0.15;
+  const bloom = new THREE.Mesh(new THREE.SphereGeometry(0.05,10,8), M.flower);
+  bloom.position.set(-0.49, FL+0.12+0.56, 0.05);
+  g.add(fl, bw, s1, s2, pillar, scroll, rod, vase, stem, bloom);
+  g.children.forEach(c=>{c.castShadow=true; c.receiveShadow=true;});
+  g.position.set(-0.6, 0, -half - td/2);
+  room.add(g);
+})();
+
+// ---------- Shoji screens (right + front, glowing) ----------
+function shojiPanel(x, z, rotY){
+  const g = new THREE.Group();
+  const paper = new THREE.Mesh(new THREE.BoxGeometry(1.05, WH-0.2, 0.03), M.shoji);
+  paper.receiveShadow = true;
+  g.add(paper);
+  // lattice
+  for(let i=-2;i<=2;i++){
+    const h = new THREE.Mesh(new THREE.BoxGeometry(1.05, 0.03, 0.045), M.shojiFrame);
+    h.position.y = i*(WH-0.2)/5;
+    g.add(h);
+  }
+  for(let i=-1;i<=1;i++){
+    const v = new THREE.Mesh(new THREE.BoxGeometry(0.03, WH-0.2, 0.045), M.shojiFrame);
+    v.position.x = i*0.34;
+    g.add(v);
+  }
+  const frame = new THREE.Mesh(new THREE.BoxGeometry(1.12, WH-0.1, 0.06), M.shojiFrame);
+  frame.position.z = -0.001;
+  // frame as border: use 4 slats instead of solid so paper shows
+  g.remove(frame);
+  [[0,(WH-0.2)/2+0.04,1.12,0.08],[0,-(WH-0.2)/2-0.04,1.12,0.08]].forEach(([px,py,w,h])=>{
+    const s = new THREE.Mesh(new THREE.BoxGeometry(w,h,0.06), M.shojiFrame);
+    s.position.set(px,py,0); g.add(s);
+  });
+  [[-0.56,0],[0.56,0]].forEach(([px])=>{
+    const s = new THREE.Mesh(new THREE.BoxGeometry(0.08,WH+0.06,0.06), M.shojiFrame);
+    s.position.set(px,0,0); g.add(s);
+  });
+  g.position.set(x, WY, z);
+  g.rotation.y = rotY;
+  room.add(g);
+}
+// right wall: two shoji, one slid half open (gap shows garden)
+shojiPanel(half, WY*0, 0); // placeholder fix below
+room.children.pop(); // remove placeholder
+shojiPanel(half, -1.1, Math.PI/2);
+shojiPanel(half,  0.05, Math.PI/2);   // slightly overlapping = "open"
+// front wall: two shoji
+shojiPanel(-1.1, half, 0);
+shojiPanel( 1.1, half, 0);
+
+// nijiriguchi (crawl-in guest entrance) on front-right — small dark opening
+box(0.7, 0.75, 0.06, M.woodDark, 1.85, FL+0.375, half+0.01);
+
+// ---------- Roof ----------
+(function(){
+  const g = new THREE.Group();
+  const roof = new THREE.Mesh(new THREE.ConeGeometry(4.1, 1.5, 4), M.roof);
+  roof.rotation.y = Math.PI/4;
+  roof.position.y = FL + WH + 0.75 + 0.3;
+  roof.castShadow = true;
+  // beam ring
+  const ring = new THREE.Mesh(new THREE.BoxGeometry(half*2+0.4, 0.18, half*2+0.4), M.wood);
+  ring.position.y = FL + WH + 0.15;
+  ring.castShadow = true;
+  g.add(roof, ring);
+  room.add(g);
+})();
+
+// ---------- Interior: ro (hearth), kama (kettle), chawan ----------
+// sunken hearth
+box(0.7, 0.02, 0.7, M.iron, 0.9, TY+0.04, 0.6);
+const hearthGlow = new THREE.Mesh(
+  new THREE.BoxGeometry(0.5,0.02,0.5),
+  new THREE.MeshStandardMaterial({ color: 0xff5a1f, emissive: 0xff4400, emissiveIntensity: 1.2 })
+);
+hearthGlow.position.set(0.9, TY+0.05, 0.6);
+room.add(hearthGlow);
+
+// iron kettle
+(function(){
+  const g = new THREE.Group();
+  const body = new THREE.Mesh(new THREE.SphereGeometry(0.24, 16, 12), M.iron);
+  body.scale.y = 0.8;
+  const lid = new THREE.Mesh(new THREE.CylinderGeometry(0.1,0.12,0.05,12), M.iron);
+  lid.position.y = 0.19;
+  const knob = new THREE.Mesh(new THREE.SphereGeometry(0.03,8,6), M.iron);
+  knob.position.y = 0.24;
+  g.add(body, lid, knob);
+  g.children.forEach(c=>{c.castShadow=true;});
+  g.position.set(0.9, TY+0.28, 0.6);
+  room.add(g);
+})();
+
+// tea bowl with matcha
+(function(){
+  const bowl = new THREE.Mesh(new THREE.CylinderGeometry(0.11, 0.06, 0.09, 14), M.bowl);
+  bowl.position.set(-0.3, TY+0.075, 0.5);
+  bowl.castShadow = true;
+  const tea = new THREE.Mesh(new THREE.CylinderGeometry(0.09, 0.09, 0.01, 14), M.matcha);
+  tea.position.set(-0.3, TY+0.11, 0.5);
+  room.add(bowl, tea);
+})();
+
+// ---------- v2 additions: more items ----------
+// enso (ink circle) on the scroll
+(function(){
+  const enso = new THREE.Mesh(new THREE.TorusGeometry(0.11, 0.018, 8, 28, Math.PI*1.8),
+    new THREE.MeshStandardMaterial({color:0x1e1c1a, roughness:0.9}));
+  enso.position.set(-0.6, WY+0.35, -half-0.7+0.075);
+  enso.rotation.z = 0.4;
+  room.add(enso);
+})();
+
+// ridge ornament on roof
+(function(){
+  const cap = new THREE.Mesh(new THREE.SphereGeometry(0.16, 12, 10), M.woodDark);
+  cap.position.y = FL + WH + 0.3 + 1.5;
+  cap.castShadow = true;
+  room.add(cap);
+})();
+
+// tana (display shelf) with natsume, chasen, chashaku
+(function(){
+  const g = new THREE.Group();
+  const shelf = new THREE.Mesh(new THREE.BoxGeometry(0.9, 0.03, 0.35), M.woodDark);
+  shelf.position.set(0, 0.55, 0);
+  const leg1 = new THREE.Mesh(new THREE.CylinderGeometry(0.02,0.02,0.55,8), M.woodDark);
+  leg1.position.set(-0.4, 0.275, 0.12);
+  const leg2 = leg1.clone(); leg2.position.set(0.4, 0.275, 0.12);
+  const leg3 = leg1.clone(); leg3.position.set(-0.4, 0.275, -0.12);
+  const leg4 = leg1.clone(); leg4.position.set(0.4, 0.275, -0.12);
+  // natsume (lacquered tea caddy)
+  const natsume = new THREE.Mesh(new THREE.SphereGeometry(0.07, 12, 10),
+    new THREE.MeshStandardMaterial({color:0x141210, roughness:0.25, metalness:0.1}));
+  natsume.scale.y = 1.25;
+  natsume.position.set(-0.2, 0.64, 0);
+  // chasen (whisk): handle + head
+  const ch1 = new THREE.Mesh(new THREE.CylinderGeometry(0.028,0.033,0.1,10),
+    new THREE.MeshStandardMaterial({color:0xe2d6b4, roughness:0.8}));
+  ch1.position.set(0.15, 0.62, 0);
+  const ch2 = new THREE.Mesh(new THREE.SphereGeometry(0.05, 10, 8),
+    new THREE.MeshStandardMaterial({color:0xe2d6b4, roughness:0.9}));
+  ch2.scale.y = 1.35;
+  ch2.position.set(0.15, 0.71, 0);
+  // chashaku (tea scoop)
+  const scoop = new THREE.Mesh(new THREE.BoxGeometry(0.28, 0.008, 0.02),
+    new THREE.MeshStandardMaterial({color:0xcbb98e, roughness:0.7}));
+  scoop.position.set(0.05, 0.585, 0.1);
+  scoop.rotation.y = 0.5;
+  g.add(shelf, leg1, leg2, leg3, leg4, natsume, ch1, ch2, scoop);
+  g.children.forEach(c=>{c.castShadow=true; c.receiveShadow=true;});
+  g.position.set(-1.6, TY, -1.7);
+  room.add(g);
+})();
+
+// mizusashi (water jar)
+(function(){
+  const jar = new THREE.Mesh(new THREE.CylinderGeometry(0.12, 0.13, 0.24, 14),
+    new THREE.MeshStandardMaterial({color:0x5a6e82, roughness:0.5}));
+  jar.position.set(-1.9, TY+0.12, -1.2);
+  const lid = new THREE.Mesh(new THREE.CylinderGeometry(0.125, 0.125, 0.02, 14), M.woodDark);
+  lid.position.set(-1.9, TY+0.25, -1.2);
+  jar.castShadow = lid.castShadow = true;
+  room.add(jar, lid);
+})();
+
+// zabuton cushions
+[[-0.9, 0.6, 0x8c3c40, 0.1], [0.5, -0.9, 0x46506e, -0.15]].forEach(([x,z,col,rot])=>{
+  const zab = new THREE.Mesh(new THREE.BoxGeometry(0.55, 0.07, 0.55),
+    new THREE.MeshStandardMaterial({color: col, roughness: 0.95}));
+  zab.position.set(x, TY+0.06, z);
+  zab.rotation.y = rot;
+  zab.castShadow = true; zab.receiveShadow = true;
+  room.add(zab);
+});
+
+// pine trees (stacked cones)
+function pine(x, z, s){
+  const g = new THREE.Group();
+  const trunk = new THREE.Mesh(new THREE.CylinderGeometry(0.07*s, 0.1*s, 0.9*s, 8), M.woodDark);
+  trunk.position.y = 0.45*s;
+  g.add(trunk);
+  [[0.75,0.7,0.9],[0.6,0.6,1.35],[0.42,0.55,1.8]].forEach(([r,h,y])=>{
+    const c = new THREE.Mesh(new THREE.ConeGeometry(r*s, h*s, 10),
+      new THREE.MeshStandardMaterial({color:0x305434, roughness:0.95}));
+    c.position.y = y*s;
+    g.add(c);
+  });
+  g.children.forEach(c=>{c.castShadow=true; c.receiveShadow=true;});
+  g.position.set(x, 0.1, z);
+  room.add(g);
+}
+pine(4.6, -3.4, 1.2); pine(-3.6, -4.2, 0.9); pine(-5.0, -1.0, 0.7);
+
+// bamboo cluster
+[[0,0,2.6],[0.25,0.1,2.2],[-0.15,0.22,2.9]].forEach(([dx,dz,h])=>{
+  const stalk = new THREE.Mesh(new THREE.CylinderGeometry(0.05, 0.05, h, 8),
+    new THREE.MeshStandardMaterial({color:0x8a9a4a, roughness:0.7}));
+  stalk.position.set(5.2+dx, h/2+0.1, -1.2+dz);
+  const leaves = new THREE.Mesh(new THREE.SphereGeometry(0.3, 8, 6),
+    new THREE.MeshStandardMaterial({color:0x305434, roughness:0.95}));
+  leaves.scale.y = 1.4;
+  leaves.position.set(5.2+dx, h+0.2, -1.2+dz);
+  stalk.castShadow = leaves.castShadow = true;
+  room.add(stalk, leaves);
+});
+
+// tsukubai (water basin) with water surface
+(function(){
+  const basin = new THREE.Mesh(new THREE.CylinderGeometry(0.3, 0.32, 0.28, 10), M.stone);
+  basin.position.set(2.9, 0.24, 4.6);
+  const water = new THREE.Mesh(new THREE.CylinderGeometry(0.22, 0.22, 0.02, 10),
+    new THREE.MeshStandardMaterial({color:0x7896aa, roughness:0.15, metalness:0.3}));
+  water.position.set(2.9, 0.39, 4.6);
+  // bamboo ladle resting across
+  const ladle = new THREE.Mesh(new THREE.CylinderGeometry(0.015, 0.015, 0.5, 6),
+    new THREE.MeshStandardMaterial({color:0x8a9a4a, roughness:0.7}));
+  ladle.rotation.z = Math.PI/2; ladle.rotation.y = 0.4;
+  ladle.position.set(2.9, 0.42, 4.6);
+  basin.castShadow = true;
+  room.add(basin, water, ladle);
+})();
+
+// ---------- Steam particles from the kettle ----------
+const steamCount = 40;
+const steamGeo = new THREE.BufferGeometry();
+const steamPos = new Float32Array(steamCount*3);
+const steamPhase = [];
+for(let i=0;i<steamCount;i++){
+  steamPhase.push(Math.random());
+  steamPos[i*3]=0.9; steamPos[i*3+1]=TY+0.5; steamPos[i*3+2]=0.6;
+}
+steamGeo.setAttribute('position', new THREE.BufferAttribute(steamPos, 3));
+const steam = new THREE.Points(steamGeo, new THREE.PointsMaterial({
+  color: 0xe8e4da, size: 0.09, transparent: true, opacity: 0.5, depthWrite: false
+}));
+room.add(steam);
+
+// ---------- Interaction: drag to rotate, auto-spin otherwise ----------
+let autoSpeed = 0.35;           // rad/s
+let vel = 0;                     // user-imparted velocity
+let dragging = false, lastX = 0;
+let idleTimer = 0;
+const el = renderer.domElement;
+
+function down(x){ dragging = true; lastX = x; }
+function move(x){
+  if(!dragging) return;
+  const dx = x - lastX; lastX = x;
+  room.rotation.y += dx * 0.006;
+  vel = dx * 0.006 * 60;
+  idleTimer = 0;
+}
+function up(){ dragging = false; }
+
+el.addEventListener('mousedown', e=>down(e.clientX));
+addEventListener('mousemove', e=>move(e.clientX));
+addEventListener('mouseup', up);
+el.addEventListener('touchstart', e=>down(e.touches[0].clientX), {passive:true});
+el.addEventListener('touchmove', e=>move(e.touches[0].clientX), {passive:true});
+addEventListener('touchend', up);
+
+// zoom
+let camDist = camera.position.length();
+el.addEventListener('wheel', e=>{
+  camDist = Math.min(24, Math.max(6, camDist + e.deltaY*0.01));
+}, {passive:true});
+
+const reduceMotion = matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+// ---------- Animate ----------
+const clock = new THREE.Clock();
+function animate(){
+  requestAnimationFrame(animate);
+  const dt = Math.min(clock.getDelta(), 0.05);
+  const t = clock.elapsedTime;
+
+  if(!dragging){
+    idleTimer += dt;
+    // inertia decays, then blend back to gentle auto-rotation
+    vel *= 0.95;
+    const auto = reduceMotion ? 0 : autoSpeed * Math.min(1, Math.max(0, idleTimer-1.2));
+    room.rotation.y += (vel + auto) * dt;
+  }
+
+  // camera dolly easing
+  const dir = camera.position.clone().normalize();
+  camera.position.lerp(dir.multiplyScalar(camDist), 0.08);
+  camera.lookAt(0, 1.4, 0);
+
+  // hearth flicker
+  hearthLight.intensity = 1.0 + Math.sin(t*9)*0.15 + Math.sin(t*23)*0.08;
+
+  // steam rise
+  const p = steamGeo.attributes.position.array;
+  for(let i=0;i<steamCount;i++){
+    steamPhase[i] += dt*0.25;
+    if(steamPhase[i] > 1) steamPhase[i] -= 1;
+    const ph = steamPhase[i];
+    p[i*3]   = 0.9 + Math.sin(ph*12 + i)*0.06*ph;
+    p[i*3+1] = TY + 0.5 + ph*1.1;
+    p[i*3+2] = 0.6 + Math.cos(ph*10 + i)*0.06*ph;
+  }
+  steamGeo.attributes.position.needsUpdate = true;
+  steam.material.opacity = 0.45;
+
+  renderer.render(scene, camera);
+}
+animate();
+
+addEventListener('resize', ()=>{
+  camera.aspect = innerWidth/innerHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(innerWidth, innerHeight);
+});
+</script>
+</body>
+</html>
